@@ -1,0 +1,1032 @@
+--[[
+  👑 KING ALVI • Obstacle Replacer v1.8
+  by King Alvi
+
+  Cara pakai:
+  1. PILIH   -> tap objek BARU (pengganti)
+  2. TAMBAH  -> tap semua objek LAMA (tap lagi untuk batal), lalu tekan SELESAI
+     FOLDER  -> tap 1 objek, otomatis ambil semua isi foldernya
+  3. REPLACE OBSTACLES        -> objek lama dihapus
+     REPLACE (KEEP BACKUP)    -> objek lama disimpan, bisa di-UNDO
+]]
+
+local Players   = game:GetService("Players")
+local RunService= game:GetService("RunService")
+local UIS       = game:GetService("UserInputService")
+local TS        = game:GetService("TweenService")
+local CoreGui   = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+
+local C = {
+	BG=Color3.fromRGB(11,12,22), SIDE=Color3.fromRGB(16,17,30), HEAD=Color3.fromRGB(20,21,38),
+	CARD=Color3.fromRGB(24,26,46), GOLD=Color3.fromRGB(255,200,70), GOLD2=Color3.fromRGB(255,140,40),
+	PURPLE=Color3.fromRGB(130,90,255), OK=Color3.fromRGB(70,225,140), BAD=Color3.fromRGB(255,80,100),
+	WARN=Color3.fromRGB(255,185,65), TEXT=Color3.fromRGB(245,245,255), SUB=Color3.fromRGB(150,153,180),
+	LINE=Color3.fromRGB(46,48,80),
+}
+
+-- ================= STATE =================
+local newObj, newBox = nil, nil
+local oldList, oldSet, oldBoxes = {}, {}, {}
+local undoStack = {}
+local pickMode = nil          -- nil | "new" | "old" | "folder"
+local scaleMode = 1           -- 1 PROPORSIONAL, 2 UKURAN ASLI
+local rotMode = 1             -- 1 IKUT OBJEK LAMA, 2 ROTASI ASLI
+local hlOn = true
+local scopeMode = 1           -- 1 SELURUH MAP, 2 FOLDER SAMA
+local critMode = 1            -- 1 NAMA SAMA, 2 NAMA + UKURAN SAMA
+local folderCopy = 1           -- 1 LANGSUNG, 2 SALIN DULU
+local copyShift = 1            -- 1 tidak geser, 2 +X 400, 3 +Z 400
+local anchorMode = 1           -- file: 1 anchor semua part, 2 sesuai file
+local posMode = 1              -- file: 1 posisi asli, 2 depan kamera
+local scriptMode = 1           -- file: 1 script ikut, 2 dibuang
+local asNewMode = 1            -- file: 1 jadikan objek baru, 2 tidak
+local yawStep = 0             -- koreksi putar: 0/90/180/270 derajat
+local tapMode = 1             -- 1 OTOMATIS (Model induk), 2 PART SAJA
+local busy = false
+local oldSource = ""
+local conns = {}
+
+-- ================= HELPER UI =================
+local function mk(class, props, parent)
+	local o = Instance.new(class)
+	for k, v in pairs(props) do o[k] = v end
+	o.Parent = parent
+	return o
+end
+local function corner(o, r) return mk("UICorner", {CornerRadius = UDim.new(0, r)}, o) end
+local function stroke(o, col, th, tr)
+	return mk("UIStroke", {Color=col, Thickness=th or 1, Transparency=tr or 0, ApplyStrokeMode=Enum.ApplyStrokeMode.Border}, o)
+end
+local function grad(o, c0, c1, rot)
+	return mk("UIGradient", {Color=ColorSequence.new(c0, c1), Rotation=rot or 0}, o)
+end
+local function tw(o, props, t, style)
+	TS:Create(o, TweenInfo.new(t or .18, style or Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
+end
+
+-- hapus UI lama
+for _, svc in ipairs({"CoreGui", "PlayerGui"}) do
+	pcall(function()
+		local old = (svc == "CoreGui" and CoreGui or LocalPlayer:FindFirstChild("PlayerGui")):FindFirstChild("KingAlvi_Replacer")
+		if old then old:Destroy() end
+	end)
+end
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "KingAlvi_Replacer"; Gui.ResetOnSpawn = false
+Gui.DisplayOrder = 999; Gui.IgnoreGuiInset = true
+if not pcall(function() Gui.Parent = CoreGui end) or not Gui.Parent then
+	Gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+-- ================= WINDOW =================
+local Main = mk("Frame", {
+	Name="Main", AnchorPoint=Vector2.new(.5,.5), Position=UDim2.fromScale(.5,.5),
+	Size=UDim2.new(.92,0,.86,0), BackgroundColor3=Color3.new(1,1,1),
+	BorderSizePixel=0, ClipsDescendants=true,
+}, Gui)
+corner(Main, 14); stroke(Main, C.GOLD, 1.5, .45)
+grad(Main, Color3.fromRGB(16,17,32), Color3.fromRGB(8,8,16), 90)
+mk("UISizeConstraint", {MaxSize=Vector2.new(470,340), MinSize=Vector2.new(300,230)}, Main)
+local MainScale = mk("UIScale", {Scale=.85}, Main)
+
+local Header = mk("Frame", {
+	Size=UDim2.new(1,0,0,44), BackgroundColor3=Color3.new(1,1,1), BorderSizePixel=0, ZIndex=3,
+}, Main)
+grad(Header, Color3.fromRGB(34,26,64), Color3.fromRGB(18,19,36), 0)
+mk("Frame", {Size=UDim2.new(1,0,0,1), Position=UDim2.new(0,0,1,-1), BackgroundColor3=C.GOLD,
+	BackgroundTransparency=.6, BorderSizePixel=0, ZIndex=3}, Header)
+mk("TextLabel", {Size=UDim2.new(0,30,1,0), Position=UDim2.new(0,12,0,0), BackgroundTransparency=1,
+	Text="👑", TextSize=20, Font=Enum.Font.GothamBold, ZIndex=4}, Header)
+local Title = mk("TextLabel", {Size=UDim2.new(1,-150,0,20), Position=UDim2.new(0,46,0,5),
+	BackgroundTransparency=1, Text="KING ALVI", TextColor3=Color3.new(1,1,1), TextSize=15,
+	Font=Enum.Font.GothamBlack, TextXAlignment=Enum.TextXAlignment.Left, ZIndex=4}, Header)
+grad(Title, C.GOLD, C.GOLD2, 0)
+mk("TextLabel", {Size=UDim2.new(1,-150,0,14), Position=UDim2.new(0,46,0,25), BackgroundTransparency=1,
+	Text="Obstacle Replacer • v1.8", TextColor3=C.SUB, TextSize=10, Font=Enum.Font.GothamMedium,
+	TextXAlignment=Enum.TextXAlignment.Left, ZIndex=4}, Header)
+
+local function hdrBtn(x, txt, hover)
+	local b = mk("TextButton", {Size=UDim2.new(0,36,0,44), Position=UDim2.new(1,x,0,0), BackgroundTransparency=1,
+		Text=txt, TextColor3=C.SUB, TextSize=20, Font=Enum.Font.GothamBold, ZIndex=4}, Header)
+	b.MouseEnter:Connect(function() tw(b, {TextColor3=hover}) end)
+	b.MouseLeave:Connect(function() tw(b, {TextColor3=C.SUB}) end)
+	return b
+end
+local MinBtn = hdrBtn(-76, "−", C.TEXT)
+local CloseBtn = hdrBtn(-38, "×", C.BAD)
+
+-- tombol mahkota saat diminimize
+local Fab = mk("TextButton", {Size=UDim2.fromOffset(48,48), Position=UDim2.new(0,16,.5,-24),
+	BackgroundColor3=C.HEAD, Text="👑", TextSize=24, Font=Enum.Font.GothamBold,
+	Visible=false, AutoButtonColor=false, ZIndex=10}, Gui)
+corner(Fab, 24); stroke(Fab, C.GOLD, 2)
+local FabLbl = mk("TextLabel", {Position=UDim2.new(1,8,0,8), AutomaticSize=Enum.AutomaticSize.X,
+	Size=UDim2.new(0,0,0,32), BackgroundColor3=C.HEAD, TextColor3=C.GOLD, TextSize=11,
+	Font=Enum.Font.GothamBold, Text="", Visible=false, ZIndex=11}, Fab)
+corner(FabLbl, 10); stroke(FabLbl, C.GOLD, 1)
+mk("UIPadding", {PaddingLeft=UDim.new(0,10), PaddingRight=UDim.new(0,10)}, FabLbl)
+local fabNoteId = 0
+local function fabNote(text, secs)
+	if not Fab.Visible then return end
+	fabNoteId = fabNoteId + 1
+	local id = fabNoteId
+	FabLbl.Text = text; FabLbl.Visible = true
+	task.delay(secs or 3, function() if id == fabNoteId then FabLbl.Visible = false end end)
+end
+
+-- drag (return fungsi untuk cek apakah benar-benar digeser)
+local function makeDraggable(handle, target)
+	local dragging, startIn, startPos, moved = false, nil, nil, false
+	handle.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging = true; moved = false; startIn = i.Position; startPos = target.Position
+			i.Changed:Connect(function()
+				if i.UserInputState == Enum.UserInputState.End then dragging = false end
+			end)
+		end
+	end)
+	table.insert(conns, UIS.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			local d = i.Position - startIn
+			if d.Magnitude > 6 then moved = true end
+			target.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end))
+	return function() return moved end
+end
+makeDraggable(Header, Main)
+local fabMoved = makeDraggable(Fab, Fab)
+
+-- ================= BODY: SIDEBAR + PAGES =================
+local Body = mk("Frame", {Position=UDim2.new(0,0,0,44), Size=UDim2.new(1,0,1,-44), BackgroundTransparency=1}, Main)
+local Side = mk("Frame", {Size=UDim2.new(0,86,1,0), BackgroundColor3=C.SIDE, BorderSizePixel=0}, Body)
+mk("UIListLayout", {Padding=UDim.new(0,4), SortOrder=Enum.SortOrder.LayoutOrder,
+	HorizontalAlignment=Enum.HorizontalAlignment.Center}, Side)
+mk("UIPadding", {PaddingTop=UDim.new(0,10)}, Side)
+mk("Frame", {Size=UDim2.new(0,1,1,0), Position=UDim2.new(0,86,0,0), BackgroundColor3=C.LINE, BorderSizePixel=0}, Body)
+mk("TextLabel", {Size=UDim2.new(0,86,0,20), Position=UDim2.new(0,0,1,-22), BackgroundTransparency=1,
+	Text="© King Alvi", TextColor3=C.GOLD, TextTransparency=.3, TextSize=9, Font=Enum.Font.GothamBold, ZIndex=2}, Body)
+local Pages = mk("Frame", {Position=UDim2.new(0,87,0,0), Size=UDim2.new(1,-87,1,0),
+	BackgroundTransparency=1, ClipsDescendants=true}, Body)
+
+local tabs, pages = {}, {}
+local function setTab(name)
+	for n, p in pairs(pages) do p.Visible = (n == name) end
+	for n, b in pairs(tabs) do
+		local on = (n == name)
+		tw(b, {BackgroundTransparency = on and .85 or 1, TextColor3 = on and C.GOLD or C.SUB})
+	end
+end
+local function makePage(name)
+	local p = mk("ScrollingFrame", {Name=name, Size=UDim2.fromScale(1,1), BackgroundTransparency=1,
+		BorderSizePixel=0, ScrollBarThickness=3, ScrollBarImageColor3=C.GOLD, CanvasSize=UDim2.new(),
+		AutomaticCanvasSize=Enum.AutomaticSize.Y, Visible=false}, Pages)
+	mk("UIPadding", {PaddingTop=UDim.new(0,12), PaddingBottom=UDim.new(0,50), PaddingLeft=UDim.new(0,12), PaddingRight=UDim.new(0,12)}, p)
+	mk("UIListLayout", {Padding=UDim.new(0,8), SortOrder=Enum.SortOrder.LayoutOrder}, p)
+	pages[name] = p
+	return p
+end
+local function makeTab(name, icon, label, order)
+	local b = mk("TextButton", {LayoutOrder=order, Size=UDim2.new(1,-12,0,34), BackgroundColor3=C.GOLD,
+		BackgroundTransparency=1, Text=icon.."  "..label, TextColor3=C.SUB, TextSize=10,
+		Font=Enum.Font.GothamBold, AutoButtonColor=false}, Side)
+	corner(b, 8)
+	tabs[name] = b
+	b.MouseButton1Click:Connect(function() setTab(name) end)
+end
+
+local function sec(parent, text, order)
+	return mk("TextLabel", {LayoutOrder=order, Size=UDim2.new(1,0,0,14), BackgroundTransparency=1, Text=text,
+		TextColor3=C.GOLD, TextSize=10, Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Left}, parent)
+end
+local function card(parent, order, h)
+	local f = mk("Frame", {LayoutOrder=order, Size=UDim2.new(1,0,0,h), BackgroundColor3=C.CARD, BorderSizePixel=0}, parent)
+	corner(f, 10); stroke(f, C.LINE, 1)
+	mk("UIPadding", {PaddingTop=UDim.new(0,10), PaddingBottom=UDim.new(0,10), PaddingLeft=UDim.new(0,12), PaddingRight=UDim.new(0,12)}, f)
+	return f
+end
+local function button(parent, text, fill, textCol, size, pos)
+	local b = mk("TextButton", {Size=size, Position=pos or UDim2.new(), BackgroundColor3=fill, Text=text,
+		TextColor3=textCol, TextSize=11, Font=Enum.Font.GothamBold, AutoButtonColor=false, BorderSizePixel=0}, parent)
+	corner(b, 8)
+	b.MouseEnter:Connect(function() tw(b, {BackgroundTransparency=.15}) end)
+	b.MouseLeave:Connect(function() tw(b, {BackgroundTransparency=0}) end)
+	return b
+end
+local function toggle(parent, order, prefix, options, onChange)
+	local b = button(parent, "", C.CARD, C.TEXT, UDim2.new(1,0,0,34))
+	b.LayoutOrder = order; stroke(b, C.LINE, 1)
+	local i = 1
+	local function refresh() b.Text = prefix .. options[i] .. "  ▸" end
+	b.MouseButton1Click:Connect(function() i = i % #options + 1; refresh(); onChange(i) end)
+	refresh()
+	return b
+end
+local function note(parent, order, text)
+	return mk("TextLabel", {LayoutOrder=order, Size=UDim2.new(1,0,0,0), AutomaticSize=Enum.AutomaticSize.Y,
+		BackgroundTransparency=1, Text=text, TextColor3=C.SUB, TextSize=10, Font=Enum.Font.GothamMedium,
+		TextWrapped=true, TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top}, parent)
+end
+
+-- ================= TOAST =================
+local toastId = 0
+local Toast = mk("TextLabel", {AnchorPoint=Vector2.new(.5,1), Position=UDim2.new(.5,0,1,50),
+	AutomaticSize=Enum.AutomaticSize.X, Size=UDim2.new(0,0,0,30), BackgroundColor3=C.HEAD,
+	TextColor3=C.TEXT, TextSize=11, Font=Enum.Font.GothamBold, Text="", ZIndex=20}, Main)
+corner(Toast, 15)
+local toastStroke = stroke(Toast, C.GOLD, 1.5)
+mk("UIPadding", {PaddingLeft=UDim.new(0,16), PaddingRight=UDim.new(0,16)}, Toast)
+local function toast(text, color)
+	toastId = toastId + 1
+	local id = toastId
+	Toast.Text = text; toastStroke.Color = color or C.GOLD; Toast.TextColor3 = color or C.TEXT
+	tw(Toast, {Position=UDim2.new(.5,0,1,-12)}, .28, Enum.EasingStyle.Back)
+	task.delay(2.6, function()
+		if id == toastId then tw(Toast, {Position=UDim2.new(.5,0,1,50)}, .25) end
+	end)
+end
+
+-- ================= GEOMETRI =================
+-- Arah & kemiringan dibaca dari BENTUK objek (bukan dari pivot),
+-- jadi konsisten walau tiap model punya pivot berbeda.
+local SIGNS = {-1, 1}
+
+local function allParts(obj)
+	if obj:IsA("BasePart") then return {obj} end
+	local t = {}
+	for _, d in ipairs(obj:GetDescendants()) do
+		if d:IsA("BasePart") then table.insert(t, d) end
+	end
+	return t
+end
+
+-- ukuran lokal (dipakai untuk membandingkan ukuran pada SAMA NAMA)
+local function getSize(obj)
+	if obj:IsA("BasePart") then return obj.Size end
+	local ok, s = pcall(function() return obj:GetExtentsSize() end)
+	if ok and s then return s end
+	return Vector3.new(1, 1, 1)
+end
+
+local function domSign(v)
+	local ax, ay, az = math.abs(v.X), math.abs(v.Y), math.abs(v.Z)
+	local m = math.max(ax, ay, az)
+	local c = (m == ax and v.X) or (m == ay and v.Y) or v.Z
+	if c >= 0 then return v else return -v end
+end
+
+-- Frame objek: rot (sumbu panjang / lebar / tebal), size (ukuran box searah sumbu itu), center (titik tengah box)
+local function getFrame(obj)
+	local parts = allParts(obj)
+	if #parts == 0 then return nil end
+	local main, bv = parts[1], -1
+	for _, p in ipairs(parts) do
+		local v = p.Size.X * p.Size.Y * p.Size.Z
+		if v > bv then main, bv = p, v end
+	end
+	local cf, msz = main.CFrame, main.Size
+	local ax = {{msz.X, cf.RightVector}, {msz.Y, cf.UpVector}, {msz.Z, cf.LookVector}}
+	table.sort(ax, function(a, b) return a[1] > b[1] end)
+	local L = domSign(ax[1][2])                 -- sumbu terpanjang
+	local S = ax[3][2]                          -- sumbu tertipis (normal)
+	if math.abs(S.Y) > .3 then
+		if S.Y < 0 then S = -S end
+	else
+		S = domSign(S)
+	end
+	local M = S:Cross(L)
+	local R = CFrame.fromMatrix(Vector3.new(), L, M, S)
+
+	local INF = math.huge
+	local mn, mx = Vector3.new(INF, INF, INF), Vector3.new(-INF, -INF, -INF)
+	for _, p in ipairs(parts) do
+		local pcf, h = p.CFrame, p.Size * .5
+		for _, sx in ipairs(SIGNS) do for _, sy in ipairs(SIGNS) do for _, sz in ipairs(SIGNS) do
+			local l = R:PointToObjectSpace(pcf:PointToWorldSpace(Vector3.new(sx*h.X, sy*h.Y, sz*h.Z)))
+			mn = Vector3.new(math.min(mn.X, l.X), math.min(mn.Y, l.Y), math.min(mn.Z, l.Z))
+			mx = Vector3.new(math.max(mx.X, l.X), math.max(mx.Y, l.Y), math.max(mx.Z, l.Z))
+		end end end
+	end
+	return {rot = R, size = mx - mn, center = R:PointToWorldSpace((mn + mx) * .5)}
+end
+
+local function scaleUniform(obj, f)
+	if obj:IsA("Model") then
+		pcall(function() obj:ScaleTo(obj:GetScale() * f) end)
+	elseif obj:IsA("BasePart") then
+		obj.Size = obj.Size * f
+	end
+end
+local function rotateAbout(obj, point, delta)
+	local m = CFrame.new(point) * delta * CFrame.new(-point)
+	if obj:IsA("Model") then obj:PivotTo(m * obj:GetPivot())
+	elseif obj:IsA("BasePart") then obj.CFrame = m * obj.CFrame end
+end
+local function shiftBy(obj, v)
+	if obj:IsA("Model") then obj:PivotTo(obj:GetPivot() + v)
+	elseif obj:IsA("BasePart") then obj.CFrame = obj.CFrame + v end
+end
+
+-- ================= SELEKSI & HIGHLIGHT =================
+local function makeBox(obj, color)
+	if not hlOn then return nil end
+	local ok, b = pcall(function()
+		local s = Instance.new("SelectionBox")
+		s.Adornee = obj; s.Color3 = color; s.LineThickness = .04
+		s.SurfaceColor3 = color; s.SurfaceTransparency = .82; s.Parent = Gui
+		return s
+	end)
+	return ok and b or nil
+end
+
+local newName, oldCount, newHint, btnRep
+local function refreshInfo()
+	newName.Text = newObj and ("📦  " .. newObj.Name) or "Belum dipilih"
+	if #oldList == 0 then
+		oldCount.Text = "Belum dipilih..."; oldCount.TextColor3 = C.SUB
+	else
+		oldCount.Text = oldSource .. "  (" .. #oldList .. " objek)"; oldCount.TextColor3 = C.GOLD
+		oldCount.TextSize = 15; tw(oldCount, {TextSize = 12}, .25)
+	end
+	if btnRep then btnRep.Text = "REPLACE " .. #oldList .. " OBSTACLES" end
+end
+local function removeOld(obj)
+	local i = table.find(oldList, obj)
+	if i then table.remove(oldList, i) end
+	oldSet[obj] = nil
+	if oldBoxes[obj] then oldBoxes[obj]:Destroy(); oldBoxes[obj] = nil end
+end
+local function clearOld()
+	for _, b in pairs(oldBoxes) do b:Destroy() end
+	oldList, oldSet, oldBoxes = {}, {}, {}
+	refreshInfo()
+end
+local function addOld(obj, noBox)
+	if obj == newObj then toast("Itu objek baru, pilih yang lain", C.BAD); return end
+	if oldSet[obj] then return end
+	oldSet[obj] = true
+	table.insert(oldList, obj)
+	oldBoxes[obj] = (not noBox) and makeBox(obj, C.GOLD) or nil
+	refreshInfo()
+end
+local function setNew(obj)
+	if newBox then newBox:Destroy(); newBox = nil end
+	if oldSet[obj] then removeOld(obj) end
+	newObj = obj
+	newBox = makeBox(obj, C.OK)
+	refreshInfo()
+	toast("Objek baru: " .. obj.Name, C.OK)
+end
+local function rebuildBoxes()
+	if newBox then newBox:Destroy(); newBox = nil end
+	for _, b in pairs(oldBoxes) do b:Destroy() end
+	oldBoxes = {}
+	if newObj and newObj.Parent then newBox = makeBox(newObj, C.OK) end
+	for _, o in ipairs(oldList) do oldBoxes[o] = makeBox(o, C.GOLD) end
+end
+
+local btnPick, btnAdd, btnFolder, btnName, btnBox, btnSearch, filterBox
+
+-- ===== PILIH AREA (KOTAK) =====
+local boxFirst = nil
+local selRect = mk("Frame", {Visible=false, BackgroundColor3=C.GOLD, BackgroundTransparency=.75,
+	BorderSizePixel=0, ZIndex=60}, Gui)
+stroke(selRect, C.GOLD, 2)
+local selDot = mk("Frame", {Visible=false, Size=UDim2.fromOffset(16,16), AnchorPoint=Vector2.new(.5,.5),
+	BackgroundColor3=C.GOLD, BorderSizePixel=0, ZIndex=60}, Gui)
+corner(selDot, 8)
+local function boxReset()
+	boxFirst = nil
+	selRect.Visible = false; selDot.Visible = false
+end
+local function setPick(mode)
+	pickMode = mode
+	btnPick.Text = (mode == "new") and "BATAL" or "PILIH"
+	btnAdd.Text = (mode == "old") and "SELESAI" or "TAMBAH"
+	btnFolder.Text = (mode == "folder") and "BATAL" or "FOLDER"
+	btnName.Text = (mode == "name") and "SELESAI" or "⚡ SAMA NAMA (SEKALIGUS)"
+	btnBox.Text = (mode == "box") and "SELESAI" or "▭ KOTAK (2 TAP)"
+	if mode ~= "box" then boxReset() end
+	tw(btnAdd, {BackgroundColor3 = (mode == "old") and C.OK or C.PURPLE})
+	if mode == "new" then newHint.Text = "Tap objek baru di dunia 3D..."
+	elseif mode == "old" then toast("Tap objek lama (tap lagi = batal pilih)", C.WARN)
+	elseif mode == "folder" then toast("Tap 1 objek dalam folder", C.WARN)
+	elseif mode == "name" then toast("Tap 1 obstacle → semua yang sama ikut terpilih", C.WARN)
+	elseif mode == "box" then toast("Tap 2 sudut area (jangan geser kamera)", C.WARN)
+	else newHint.Text = "Tekan PILIH lalu tap objeknya" end
+end
+
+-- ===== PILIH SEKALIGUS: cari semua objek bernama sama =====
+local function sizeSig(o)
+	local v = getSize(o)
+	local t = {v.X, v.Y, v.Z}
+	table.sort(t)
+	return t
+end
+local function sameSize(a, b)
+	for i = 1, 3 do
+		if math.abs(a[i] - b[i]) > math.max(.05, b[i] * .05) then return false end
+	end
+	return true
+end
+local function inCharacter(o)
+	for _, pl in ipairs(Players:GetPlayers()) do
+		if pl.Character and o:IsDescendantOf(pl.Character) then return true end
+	end
+	return false
+end
+local function addSimilar(ref)
+	local root = (scopeMode == 2 and ref.Parent) or workspace
+	local generic = (ref.Name == ref.ClassName) or ref.Name == "Part" or ref.Name == "Model"
+	local needSize = (critMode == 2) or generic
+	local refSig = needSize and sizeSig(ref) or nil
+	local found, matched = {}, {}
+	for _, d in ipairs(root:GetDescendants()) do
+		if d ~= newObj and d.Name == ref.Name and d.ClassName == ref.ClassName
+			and (d:IsA("Model") or d:IsA("BasePart")) and not (newObj and d:IsDescendantOf(newObj)) then
+			local nested, a = false, d.Parent
+			while a and a ~= root do
+				if matched[a] then nested = true; break end
+				a = a.Parent
+			end
+			if not nested and not inCharacter(d) and (not needSize or sameSize(sizeSig(d), refSig)) then
+				matched[d] = true
+				table.insert(found, d)
+			end
+		end
+	end
+	if #found > 500 then
+		toast("Terlalu banyak (" .. #found .. "). Ganti LINGKUP/KRITERIA di tab OPSI", C.BAD)
+		return
+	end
+	local noBox = #found > 60
+	oldSource = (#oldList == 0) and ("⚡ " .. ref.Name) or "⚡ campuran"
+	local added = 0
+	for _, d in ipairs(found) do
+		if not oldSet[d] then addOld(d, noBox); added = added + 1 end
+	end
+	local msg = "⚡ " .. added .. " objek '" .. ref.Name .. "' ditambahkan"
+	if generic then msg = msg .. " (cocok ukuran)" end
+	if noBox then msg = msg .. " • outline off" end
+	toast(msg, added > 0 and C.OK or C.WARN)
+end
+
+-- ===== SALIN FOLDER (map asli tetap aman) =====
+local function copyContainer(src)
+	local cp = src:Clone()
+	cp.Name = src.Name .. "_COPY"
+	if copyShift ~= 1 then
+		local v = (copyShift == 2) and Vector3.new(400, 0, 0) or Vector3.new(0, 0, 400)
+		for _, ch in ipairs(cp:GetChildren()) do
+			if ch:IsA("Model") or ch:IsA("BasePart") then shiftBy(ch, v) end
+		end
+	end
+	cp.Parent = src.Parent
+	return cp
+end
+
+-- ===== CARI NAMA & KOTAK =====
+local function unitOf(part)
+	if tapMode == 1 and part.Parent and part.Parent ~= workspace and part.Parent:IsA("Model") then
+		return part.Parent
+	end
+	return part
+end
+
+local function commitFound(found, label)
+	-- buang objek yang berada di dalam objek lain yang juga terpilih (hindari ganda)
+	local set = {}
+	for _, d in ipairs(found) do set[d] = true end
+	local clean = {}
+	for _, d in ipairs(found) do
+		local nested, a = false, d.Parent
+		while a and a ~= workspace do
+			if set[a] then nested = true; break end
+			a = a.Parent
+		end
+		if not nested then table.insert(clean, d) end
+	end
+	found = clean
+	if #found == 0 then toast("Tidak ada yang cocok", C.WARN); fabNote("Tidak ada yang cocok"); return end
+	if #found > 500 then
+		toast("Terlalu banyak (" .. #found .. "). Persempit filter/area", C.BAD)
+		fabNote("Terlalu banyak (" .. #found .. ")")
+		return
+	end
+	local noBox = #found > 60
+	oldSource = (#oldList == 0) and label or "campuran"
+	local added = 0
+	for _, d in ipairs(found) do
+		if not oldSet[d] then addOld(d, noBox); added = added + 1 end
+	end
+	toast(label .. " • " .. added .. " objek ditambahkan" .. (noBox and " • outline off" or ""), added > 0 and C.OK or C.WARN)
+	fabNote(label .. " +" .. added .. " • total " .. #oldList, 4)
+end
+
+local function searchByName()
+	local q = string.lower(filterBox.Text or "")
+	if q == "" then toast("Ketik nama dulu di kolom filter", C.BAD); return end
+	local found = {}
+	for _, d in ipairs(workspace:GetDescendants()) do
+		if (d:IsA("Model") or d:IsA("BasePart")) and not d:IsA("Terrain")
+			and string.find(string.lower(d.Name), q, 1, true)
+			and d ~= newObj and not (newObj and d:IsDescendantOf(newObj)) and not inCharacter(d) then
+			table.insert(found, d)
+		end
+	end
+	commitFound(found, "🔎 " .. filterBox.Text)
+end
+
+local function boxSelect(p1, p2)
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	local x0, x1 = math.min(p1.X, p2.X), math.max(p1.X, p2.X)
+	local y0, y1 = math.min(p1.Y, p2.Y), math.max(p1.Y, p2.Y)
+	local q = string.lower(filterBox.Text or "")
+	local seen, found = {}, {}
+	for _, d in ipairs(workspace:GetDescendants()) do
+		if d:IsA("BasePart") and not d:IsA("Terrain") then
+			local v, on = cam:WorldToViewportPoint(d.Position)
+			if on and v.X >= x0 and v.X <= x1 and v.Y >= y0 and v.Y <= y1 then
+				local u = unitOf(d)
+				if not seen[u] then
+					seen[u] = true
+					local sz = getSize(u)
+					if u ~= newObj and not (newObj and u:IsDescendantOf(newObj)) and not inCharacter(u)
+						and math.max(sz.X, sz.Y, sz.Z) <= 400
+						and (q == "" or string.find(string.lower(u.Name), q, 1, true)) then
+						table.insert(found, u)
+					end
+				end
+			end
+		end
+	end
+	commitFound(found, "▭ kotak")
+end
+
+local function boxTap()
+	local pos = UIS:GetMouseLocation()
+	if not boxFirst then
+		boxFirst = pos
+		selDot.Position = UDim2.fromOffset(pos.X, pos.Y); selDot.Visible = true
+		fabNote("▭ Sudut 1 ✔  tap sudut seberangnya", 5)
+	else
+		local p1 = boxFirst
+		boxFirst = nil
+		selDot.Visible = false
+		selRect.Position = UDim2.fromOffset(math.min(p1.X, pos.X), math.min(p1.Y, pos.Y))
+		selRect.Size = UDim2.fromOffset(math.abs(p1.X - pos.X), math.abs(p1.Y - pos.Y))
+		selRect.Visible = true
+		boxSelect(p1, pos)
+		task.delay(.8, function() selRect.Visible = false end)
+	end
+end
+
+local function overUI()
+	if Fab.Visible then
+		local fp, fa, fs = UIS:GetMouseLocation(), Fab.AbsolutePosition, Fab.AbsoluteSize
+		if fp.X >= fa.X and fp.X <= fa.X + fs.X and fp.Y >= fa.Y and fp.Y <= fa.Y + fs.Y then return true end
+	end
+	if not Main.Visible then return false end
+	local p = UIS:GetMouseLocation()
+	local a, s = Main.AbsolutePosition, Main.AbsoluteSize
+	return p.X >= a.X and p.X <= a.X + s.X and p.Y >= a.Y and p.Y <= a.Y + s.Y
+end
+
+table.insert(conns, Mouse.Button1Down:Connect(function()
+	if not pickMode or overUI() then return end
+	if pickMode == "box" then boxTap(); return end
+	local t = Mouse.Target
+	if not t then toast("Tidak ada objek di situ", C.BAD); return end
+	local obj = t
+	if tapMode == 1 and obj.Parent and obj.Parent:IsA("Model") then obj = obj.Parent end
+	if pickMode == "new" then
+		setNew(obj); setPick(nil)
+	elseif pickMode == "old" then
+		if #oldList == 0 then oldSource = "✋ manual" elseif oldSource ~= "✋ manual" then oldSource = "campuran" end
+		if oldSet[obj] then removeOld(obj); refreshInfo() else addOld(obj) end
+	elseif pickMode == "name" then
+		addSimilar(obj)
+	elseif pickMode == "folder" then
+		local parent = obj.Parent
+		clearOld()
+		oldSource = "📂 " .. ((parent and parent ~= workspace) and parent.Name or obj.Name)
+		if folderCopy == 2 and parent and parent ~= workspace then
+			local okc, cp = pcall(copyContainer, parent)
+			if okc and cp then
+				parent = cp
+				oldSource = "📋 " .. cp.Name
+			else
+				toast("Gagal menyalin folder", C.BAD); return
+			end
+		end
+		local n = 0
+		if parent and parent ~= workspace then
+			for _, ch in ipairs(parent:GetChildren()) do
+				if (ch:IsA("Model") or ch:IsA("BasePart")) and ch ~= newObj then addOld(ch); n = n + 1 end
+			end
+		else
+			addOld(obj); n = 1
+		end
+		toast(n .. " objek ditambahkan", C.OK)
+		setPick(nil)
+	end
+end))
+
+-- ================= REPLACE / UNDO =================
+local function doReplace(keep)
+	if busy then return end
+	if not newObj or not newObj.Parent then toast("Pilih objek baru dulu!", C.BAD); return end
+	local list = {}
+	for _, o in ipairs(oldList) do
+		if o.Parent and o ~= newObj then table.insert(list, o) end
+	end
+	if #list == 0 then toast("Pilih objek lama dulu!", C.BAD); return end
+	busy = true; setPick(nil)
+	toast("Memproses " .. #list .. " objek...", C.WARN)
+	task.spawn(function()
+		local ok, fail, rec = 0, 0, {}
+		local firstErr
+		for i, old in ipairs(list) do
+			local c
+			local success, err = pcall(function()
+				local parent = old.Parent
+				local fo = getFrame(old)
+				if not fo then error("objek lama tidak punya part") end
+				c = newObj:Clone()
+				c.Parent = parent
+				local fn = getFrame(c)
+				if not fn then error("objek baru tidak punya part") end
+				if scaleMode == 1 and fn.size.X > .001 then
+					scaleUniform(c, fo.size.X / fn.size.X)
+					fn = getFrame(c)
+				end
+				if rotMode == 1 then
+					local target = fo.rot * CFrame.Angles(0, 0, math.rad(90 * yawStep))
+					rotateAbout(c, fn.center, target * fn.rot:Inverse())
+					fn = getFrame(c)
+				end
+				shiftBy(c, fo.center - fn.center)
+				if keep then
+					table.insert(rec, {old = old, parent = parent, new = c})
+					old.Parent = nil
+				else
+					old:Destroy()
+				end
+			end)
+			if success then ok = ok + 1 else fail = fail + 1; firstErr = firstErr or tostring(err); warn("[King Alvi] gagal:", err); if c then c:Destroy() end end
+			if i % 10 == 0 then RunService.Heartbeat:Wait() end
+		end
+		if keep and #rec > 0 then
+			table.insert(undoStack, rec)
+			if #undoStack > 5 then table.remove(undoStack, 1) end
+		end
+		clearOld()
+		busy = false
+		if fail == 0 then toast("Berhasil mengganti " .. ok .. " obstacle!", C.OK)
+		else toast(ok .. " berhasil, " .. fail .. " gagal: " .. string.sub(firstErr or "?", 1, 70), C.WARN) end
+	end)
+end
+
+local function doUndo()
+	local rec = table.remove(undoStack)
+	if not rec then toast("Tidak ada yang bisa di-undo", C.WARN); return end
+	local n = 0
+	for _, r in ipairs(rec) do
+		pcall(function()
+			if r.new and r.new.Parent then r.new:Destroy() end
+			r.old.Parent = r.parent
+			n = n + 1
+		end)
+	end
+	toast("Undo: " .. n .. " objek dikembalikan", C.OK)
+end
+
+-- ================= PAGE: REPLACER =================
+local PR = makePage("replacer")
+sec(PR, "1 • OBJEK BARU (pengganti)", 1)
+local cNew = card(PR, 2, 74)
+newName = mk("TextLabel", {Size=UDim2.new(1,-90,0,18), BackgroundTransparency=1, Text="Belum dipilih",
+	TextColor3=C.TEXT, TextSize=12, Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Left,
+	TextTruncate=Enum.TextTruncate.AtEnd}, cNew)
+newHint = mk("TextLabel", {Position=UDim2.new(0,0,0,20), Size=UDim2.new(1,-90,0,28), BackgroundTransparency=1,
+	Text="Tekan PILIH lalu tap objeknya", TextColor3=C.SUB, TextSize=10, Font=Enum.Font.GothamMedium,
+	TextWrapped=true, TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top}, cNew)
+btnPick = button(cNew, "PILIH", C.PURPLE, C.TEXT, UDim2.new(0,78,0,32), UDim2.new(1,-78,1,-32))
+
+sec(PR, "2 • OBJEK LAMA (yang diganti)", 3)
+local cOld = card(PR, 4, 198)
+oldCount = mk("TextLabel", {Size=UDim2.new(1,0,0,18), BackgroundTransparency=1, Text="Belum dipilih...",
+	TextColor3=C.TEXT, TextSize=12, Font=Enum.Font.GothamBold, TextXAlignment=Enum.TextXAlignment.Left}, cOld)
+mk("TextLabel", {Position=UDim2.new(0,0,0,20), Size=UDim2.new(1,0,0,14), BackgroundTransparency=1,
+	Text="Outline emas = objek lama • hijau = objek baru", TextColor3=C.SUB, TextSize=9,
+	Font=Enum.Font.GothamMedium, TextXAlignment=Enum.TextXAlignment.Left}, cOld)
+local row = mk("Frame", {Size=UDim2.new(1,0,0,30), Position=UDim2.new(0,0,1,-30), BackgroundTransparency=1}, cOld)
+mk("UIListLayout", {FillDirection=Enum.FillDirection.Horizontal, Padding=UDim.new(0,6)}, row)
+btnAdd = button(row, "TAMBAH", C.PURPLE, C.TEXT, UDim2.new(1/3,-4,1,0))
+btnFolder = button(row, "FOLDER", C.PURPLE, C.TEXT, UDim2.new(1/3,-4,1,0))
+local btnReset = button(row, "RESET", C.CARD, C.SUB, UDim2.new(1/3,-4,1,0)); stroke(btnReset, C.LINE, 1)
+btnName = button(cOld, "⚡ SAMA NAMA (SEKALIGUS)", Color3.new(1,1,1), Color3.fromRGB(30,20,5), UDim2.new(1,0,0,32), UDim2.new(0,0,1,-70))
+grad(btnName, C.GOLD, C.GOLD2, 0)
+filterBox = mk("TextBox", {Size=UDim2.new(1,0,0,26), Position=UDim2.new(0,0,0,38), BackgroundColor3=C.BG,
+	TextColor3=C.TEXT, PlaceholderText="Filter nama (contoh: tangga)", PlaceholderColor3=C.SUB, Text="",
+	TextSize=11, Font=Enum.Font.GothamMedium, ClearTextOnFocus=false, BorderSizePixel=0}, cOld)
+corner(filterBox, 6); stroke(filterBox, C.LINE, 1)
+local row2 = mk("Frame", {Size=UDim2.new(1,0,0,32), Position=UDim2.new(0,0,1,-108), BackgroundTransparency=1}, cOld)
+mk("UIListLayout", {FillDirection=Enum.FillDirection.Horizontal, Padding=UDim.new(0,6)}, row2)
+btnBox = button(row2, "▭ KOTAK (2 TAP)", C.PURPLE, C.TEXT, UDim2.new(.5,-3,1,0))
+btnSearch = button(row2, "🔎 CARI NAMA", C.PURPLE, C.TEXT, UDim2.new(.5,-3,1,0))
+
+sec(PR, "3 • EKSEKUSI", 5)
+btnRep = button(PR, "REPLACE OBSTACLES", Color3.new(1,1,1), Color3.fromRGB(30,20,5), UDim2.new(1,0,0,42))
+btnRep.LayoutOrder = 6; btnRep.TextSize = 12; grad(btnRep, C.GOLD, C.GOLD2, 0)
+local btnBackup = button(PR, "REPLACE (KEEP BACKUP)", C.CARD, C.GOLD, UDim2.new(1,0,0,38))
+btnBackup.LayoutOrder = 7; stroke(btnBackup, C.GOLD, 1.5, .3)
+local btnUndo = button(PR, "↶  UNDO TERAKHIR", C.CARD, C.SUB, UDim2.new(1,0,0,30))
+btnUndo.LayoutOrder = 8; stroke(btnUndo, C.LINE, 1)
+
+btnPick.MouseButton1Click:Connect(function() setPick(pickMode == "new" and nil or "new") end)
+btnAdd.MouseButton1Click:Connect(function() setPick(pickMode == "old" and nil or "old") end)
+btnFolder.MouseButton1Click:Connect(function() setPick(pickMode == "folder" and nil or "folder") end)
+btnName.MouseButton1Click:Connect(function() setPick(pickMode == "name" and nil or "name") end)
+btnSearch.MouseButton1Click:Connect(searchByName)
+btnBox.MouseButton1Click:Connect(function()
+	if pickMode == "box" then setPick(nil); return end
+	setPick("box")
+	Main.Visible = false; Fab.Visible = true
+	fabNote("▭ Tap sudut 1 area  (tap 👑 untuk selesai)", 5)
+end)
+btnReset.MouseButton1Click:Connect(function()
+	setPick(nil); clearOld()
+	if newBox then newBox:Destroy(); newBox = nil end
+	newObj = nil; refreshInfo(); toast("Pilihan direset", C.SUB)
+end)
+btnRep.MouseButton1Click:Connect(function() doReplace(false) end)
+btnBackup.MouseButton1Click:Connect(function() doReplace(true) end)
+btnUndo.MouseButton1Click:Connect(doUndo)
+
+-- ================= PAGE: OPSI =================
+local PO = makePage("opsi")
+sec(PO, "PENGATURAN", 1)
+toggle(PO, 2, "SKALA: ", {"PROPORSIONAL", "UKURAN ASLI"}, function(i) scaleMode = i end)
+note(PO, 3, "PROPORSIONAL = objek baru disesuaikan ukurannya tanpa melar. UKURAN ASLI = ukuran objek baru tidak diubah.")
+toggle(PO, 4, "ROTASI: ", {"IKUT OBJEK LAMA", "ROTASI ASLI"}, function(i) rotMode = i end)
+note(PO, 5, "IKUT OBJEK LAMA = arah dan kemiringan disamakan dengan objek yang diganti (dibaca dari bentuk objek, bukan dari pivot).")
+toggle(PO, 6, "OUTLINE: ", {"NYALA", "MATI"}, function(i) hlOn = (i == 1); rebuildBoxes() end)
+note(PO, 7, "Outline menandai objek yang dipilih. Matikan kalau terasa berat.")
+sec(PO, "PILIH SEKALIGUS", 8)
+toggle(PO, 9, "LINGKUP: ", {"SELURUH MAP", "FOLDER SAMA"}, function(i) scopeMode = i end)
+note(PO, 10, "SELURUH MAP = cari obstacle bernama sama di mana saja. FOLDER SAMA = hanya di folder/model yang sama dengan objek yang di-tap.")
+toggle(PO, 11, "KRITERIA: ", {"NAMA SAMA", "NAMA + UKURAN SAMA"}, function(i) critMode = i end)
+note(PO, 12, "Nama umum seperti Part otomatis dicocokkan juga lewat ukuran, supaya tidak ikut mengambil semua part di map.")
+toggle(PO, 13, "TAP MEMILIH: ", {"OTOMATIS", "PART SAJA"}, function(i) tapMode = i end)
+note(PO, 14, "OTOMATIS = kalau part ada di dalam Model, yang dipilih Model-nya. PART SAJA = hanya part yang di-tap.")
+sec(PO, "KOREKSI ARAH", 15)
+toggle(PO, 16, "PUTAR: ", {"0°", "90°", "180°", "270°"}, function(i) yawStep = i - 1 end)
+note(PO, 17, "Kalau objek baru menghadap arah yang salah (misalnya terputar 90°), ubah di sini. Putarannya terhadap sumbu tegak lurus permukaan objek, jadi kemiringan tetap ikut objek lama.")
+sec(PO, "SALINAN (MAP ASLI AMAN)", 18)
+toggle(PO, 19, "FOLDER: ", {"LANGSUNG", "SALIN DULU"}, function(i) folderCopy = i end)
+note(PO, 20, "SALIN DULU = tombol FOLDER menggandakan foldernya lebih dulu, lalu yang diganti adalah salinannya. Folder asli tidak disentuh.")
+toggle(PO, 21, "GESER SALINAN: ", {"TIDAK", "+X 400 STUD", "+Z 400 STUD"}, function(i) copyShift = i end)
+note(PO, 22, "Supaya salinan tidak menumpuk persis di atas folder asli.")
+
+-- ================= PAGE: INFO =================
+local PI = makePage("info")
+sec(PI, "TENTANG", 1)
+note(PI, 2, "👑 KING ALVI • Obstacle Replacer v1.8\nDibuat oleh King Alvi untuk membangun map obstacle.")
+sec(PI, "CARA PAKAI", 3)
+note(PI, 4, "1. PILIH → tap objek baru.\n2. ⚡ SAMA NAMA → tap 1 obstacle, semua yang namanya sama ikut terpilih (paling cepat). TAMBAH = tap satu per satu. FOLDER = semua isi folder.\n🔎 CARI NAMA = ketik nama di kolom filter, tekan CARI, semua yang namanya mengandung teks itu langsung terpilih. ▭ KOTAK = panel menyusut, tap 2 sudut area di layar (jangan geser kamera), semua obstacle di area itu terpilih; tap 👑 untuk selesai. Kolom filter juga menyaring hasil KOTAK. SALINAN: di tab OPSI pilih FOLDER = SALIN DULU, maka tombol FOLDER menggandakan foldernya dan yang diganti adalah salinannya, folder asli aman. 📁 FILE = muat file .rbxm dari folder Workspace executor ke map, lalu bisa langsung dipakai sebagai objek baru. Semua part hasil muat otomatis di-Anchor (bisa dimatikan di tab FILE). Script di dalam file ikut dimuat (bisa dibuang di tab FILE). File rbxl/rbxlx: hanya isi Workspace yang diambil.\n3. REPLACE OBSTACLES untuk mengganti.\n\nKEEP BACKUP menyimpan objek lama sehingga bisa di-UNDO (backup hilang kalau GUI ditutup).")
+
+-- ================= PAGE: FILE =================
+local PF = makePage("file")
+sec(PF, "OPSI MUAT", 1)
+toggle(PF, 2, "POSISI: ", {"ASLI", "DEPAN KAMERA"}, function(i) posMode = i end)
+toggle(PF, 3, "SCRIPT DI FILE: ", {"IKUT", "DIBUANG"}, function(i) scriptMode = i end)
+toggle(PF, 4, "JADIKAN OBJEK BARU: ", {"YA", "TIDAK"}, function(i) asNewMode = i end)
+toggle(PF, 5, "ANCHOR: ", {"SEMUA PART", "SESUAI FILE"}, function(i) anchorMode = i end)
+sec(PF, "FILE (.rbxm .rbxmx .rbxl .rbxlx)", 6)
+local folderBox = mk("TextBox", {LayoutOrder=7, Size=UDim2.new(1,0,0,28), BackgroundColor3=C.CARD,
+	TextColor3=C.TEXT, PlaceholderText="Subfolder (kosong = folder utama)", PlaceholderColor3=C.SUB, Text="",
+	TextSize=11, Font=Enum.Font.GothamMedium, ClearTextOnFocus=false, BorderSizePixel=0}, PF)
+corner(folderBox, 8); stroke(folderBox, C.LINE, 1)
+local btnRefresh = button(PF, "🔄 MUAT DAFTAR FILE", C.PURPLE, C.TEXT, UDim2.new(1,0,0,34))
+btnRefresh.LayoutOrder = 8
+local fileNote = note(PF, 9, "Taruh file .rbxm di folder Workspace milik executor-mu, lalu tekan MUAT DAFTAR FILE.")
+local listFrame = mk("Frame", {LayoutOrder=10, Size=UDim2.new(1,0,0,0), AutomaticSize=Enum.AutomaticSize.Y,
+	BackgroundTransparency=1}, PF)
+mk("UIListLayout", {Padding=UDim.new(0,6), SortOrder=Enum.SortOrder.LayoutOrder}, listFrame)
+note(PF, 11, "Yang dimuat adalah isi file (Model/Part/Folder) ke Workspace, dalam folder KA_namafile. Untuk rbxl/rbxlx hanya isi Workspace yang diambil (file disalin sementara sebagai .rbxm); kalau gagal, simpan bagian obstacle-nya sebagai .rbxm.")
+
+local function listModelFiles(folder)
+	local candidates = (folder ~= "") and {folder} or {"", "."}
+	local lastErr = "listfiles tidak tersedia"
+	for _, arg in ipairs(candidates) do
+		local ok, files = pcall(listfiles, arg)
+		if ok and type(files) == "table" then
+			local out = {}
+			for _, f in ipairs(files) do
+				local low = string.lower(f)
+				if low:match("%.rbxmx?$") or low:match("%.rbxlx?$") then table.insert(out, f) end
+			end
+			table.sort(out)
+			return out
+		end
+		lastErr = tostring(files)
+	end
+	return nil, lastErr
+end
+
+-- kunci semua part (Anchored) + hentikan gerak; return jumlah yang berhasil & total
+local function anchorAll(root)
+	local total, okc = 0, 0
+	for i, d in ipairs(root:GetDescendants()) do
+		if d:IsA("BasePart") then
+			total = total + 1
+			pcall(function()
+				d.Anchored = true
+				d.AssemblyLinearVelocity = Vector3.zero
+				d.AssemblyAngularVelocity = Vector3.zero
+			end)
+			if d.Anchored then okc = okc + 1 end
+		end
+		if i % 1500 == 0 then RunService.Heartbeat:Wait() end
+	end
+	return okc, total
+end
+
+local function loadModelFile(path)
+	local gca = getcustomasset or getsynasset
+	if not gca then return nil, "executor tidak punya getcustomasset" end
+	local ext = string.lower(path):match("%.(%w+)$") or ""
+	local isPlace = (ext == "rbxl" or ext == "rbxlx")
+	local tmp
+	local loadPath = path
+	if isPlace then
+		-- file place: disalin sementara dengan ekstensi model supaya bisa dimuat
+		local okR, data = pcall(readfile, path)
+		if not okR or type(data) ~= "string" then return nil, "gagal membaca file place" end
+		tmp = "KA_tmp_" .. tostring(os.time()) .. ((ext == "rbxl") and ".rbxm" or ".rbxmx")
+		local okW = pcall(writefile, tmp, data)
+		if not okW then return nil, "executor tidak bisa menulis file sementara" end
+		loadPath = tmp
+	end
+	local roots, err
+	local okA, asset = pcall(gca, loadPath)
+	if okA and asset then
+		local ok1, r1 = pcall(function() return game:GetObjects(asset) end)
+		if ok1 and type(r1) == "table" and #r1 > 0 then
+			roots = r1
+		else
+			local ok2, r2 = pcall(function() return game:GetService("InsertService"):LoadLocalAsset(asset) end)
+			if ok2 and r2 then roots = {r2} else err = "file tidak bisa dimuat (format/executor)" end
+		end
+	else
+		err = "gagal membaca file"
+	end
+	if tmp then pcall(delfile, tmp) end
+	if not roots then return nil, err end
+	return roots, nil, isPlace
+end
+
+local importing = false
+local function importFile(path)
+	if importing then return end
+	importing = true
+	task.spawn(function()
+		toast("Memuat file...", C.WARN)
+		local roots, err, isPlace = loadModelFile(path)
+		if not roots then
+			toast("Gagal: " .. tostring(err), C.BAD); importing = false; return
+		end
+		local name = path:match("([^/\\]+)%.[^.]+$") or "file"
+		local folder = Instance.new("Folder")
+		folder.Name = "KA_" .. name
+		local units = {}
+		local function take(i)
+			if (i:IsA("Model") or i:IsA("BasePart") or i:IsA("Folder")) and i.ClassName ~= "Terrain" then
+				i.Parent = folder; table.insert(units, i)
+			end
+		end
+		for _, r in ipairs(roots) do
+			if isPlace then
+				if r.ClassName == "Workspace" then
+					for _, ch in ipairs(r:GetChildren()) do take(ch) end
+				end
+			elseif r:IsA("Model") or r:IsA("BasePart") or r:IsA("Folder") then
+				take(r)
+			else
+				for _, ch in ipairs(r:GetChildren()) do take(ch) end
+			end
+		end
+		if isPlace and #units == 0 then
+			for _, r in ipairs(roots) do
+				if r:IsA("Model") or r:IsA("BasePart") or r:IsA("Folder") then take(r)
+				else for _, ch in ipairs(r:GetChildren()) do take(ch) end end
+			end
+		end
+		if #units == 0 then
+			folder:Destroy(); toast("File kosong / tidak ada objek bangunan", C.WARN); importing = false; return
+		end
+		local removed = 0
+		if scriptMode == 2 then
+			for _, d in ipairs(folder:GetDescendants()) do
+				if d:IsA("LuaSourceContainer") then d:Destroy(); removed = removed + 1 end
+			end
+		end
+		local okN, totN = 0, 0
+		if anchorMode == 1 then okN, totN = anchorAll(folder) end
+		if posMode == 2 then
+			local cam = workspace.CurrentCamera
+			local INF = math.huge
+			local mn, mx, any = Vector3.new(INF,INF,INF), Vector3.new(-INF,-INF,-INF), false
+			for _, d in ipairs(folder:GetDescendants()) do
+				if d:IsA("BasePart") then
+					any = true
+					local pp = d.Position
+					mn = Vector3.new(math.min(mn.X,pp.X), math.min(mn.Y,pp.Y), math.min(mn.Z,pp.Z))
+					mx = Vector3.new(math.max(mx.X,pp.X), math.max(mx.Y,pp.Y), math.max(mx.Z,pp.Z))
+				end
+			end
+			if any and cam then
+				local v = (cam.CFrame.Position + cam.CFrame.LookVector * 40) - (mn + mx) * .5
+				local function shiftTree(inst)
+					if inst:IsA("Model") or inst:IsA("BasePart") then shiftBy(inst, v)
+					elseif inst:IsA("Folder") then
+						for _, c in ipairs(inst:GetChildren()) do shiftTree(c) end
+					end
+				end
+				for _, u in ipairs(units) do shiftTree(u) end
+			end
+		end
+		folder.Parent = workspace
+		if anchorMode == 1 then
+			-- kunci ulang setelah masuk Workspace, lalu pantau 5 detik (part baru / anchor yang dilepas)
+			okN, totN = anchorAll(folder)
+			local watch
+			watch = folder.DescendantAdded:Connect(function(d)
+				if d:IsA("BasePart") then pcall(function() d.Anchored = true end) end
+			end)
+			task.delay(5, function() if watch then watch:Disconnect() end end)
+		end
+		if asNewMode == 1 and #units == 1 and (units[1]:IsA("Model") or units[1]:IsA("BasePart")) then
+			setNew(units[1])
+		end
+		local msg = "✅ " .. #units .. " objek dimuat → " .. folder.Name
+		if removed > 0 then msg = msg .. " • " .. removed .. " script dibuang" end
+		if anchorMode == 1 then msg = msg .. " • anchor " .. okN .. "/" .. totN .. " part" end
+		toast(msg, C.OK)
+		importing = false
+	end)
+end
+
+local function refreshFiles()
+	for _, ch in ipairs(listFrame:GetChildren()) do
+		if ch:IsA("Frame") then ch:Destroy() end
+	end
+	local files, err = listModelFiles(folderBox.Text or "")
+	if not files then fileNote.Text = "Executor-mu tidak bisa membaca folder: " .. tostring(err); return end
+	if #files == 0 then fileNote.Text = "Tidak ada file .rbxm/.rbxmx/.rbxl/.rbxlx di folder ini."; return end
+	fileNote.Text = #files .. " file ditemukan"
+	for i, path in ipairs(files) do
+		local row = mk("Frame", {LayoutOrder=i, Size=UDim2.new(1,0,0,34), BackgroundColor3=C.CARD, BorderSizePixel=0}, listFrame)
+		corner(row, 8); stroke(row, C.LINE, 1)
+		mk("TextLabel", {Size=UDim2.new(1,-84,1,0), Position=UDim2.new(0,10,0,0), BackgroundTransparency=1,
+			Text=path:match("[^/\\]+$") or path, TextColor3=C.TEXT, TextSize=11, Font=Enum.Font.GothamMedium,
+			TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd}, row)
+		local b = button(row, "MUAT", C.PURPLE, C.TEXT, UDim2.new(0,64,0,24), UDim2.new(1,-70,.5,-12))
+		b.MouseButton1Click:Connect(function() importFile(path) end)
+	end
+end
+btnRefresh.MouseButton1Click:Connect(refreshFiles)
+
+makeTab("replacer", "🔁", "REPLACER", 1)
+makeTab("opsi", "⚙️", "OPSI", 2)
+makeTab("file", "📁", "FILE", 3)
+makeTab("info", "ℹ️", "INFO", 4)
+tabs["file"].MouseButton1Click:Connect(refreshFiles)
+setTab("replacer")
+refreshInfo()
+
+-- ================= KONTROL WINDOW =================
+MinBtn.MouseButton1Click:Connect(function()
+	setPick(nil)
+	Main.Visible = false; Fab.Visible = true
+end)
+Fab.MouseButton1Click:Connect(function()
+	if fabMoved() then return end
+	Fab.Visible = false; Main.Visible = true
+	if pickMode == "box" then setPick(nil) end
+	MainScale.Scale = .85
+	tw(MainScale, {Scale = 1}, .3, Enum.EasingStyle.Back)
+end)
+CloseBtn.MouseButton1Click:Connect(function()
+	for _, c in ipairs(conns) do c:Disconnect() end
+	Gui:Destroy()
+end)
+
+tw(MainScale, {Scale = 1}, .4, Enum.EasingStyle.Back)
+print("[King Alvi] Obstacle Replacer v1.8 loaded 👑")
